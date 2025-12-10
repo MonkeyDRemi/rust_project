@@ -27,11 +27,62 @@ pub trait Disk {
 
 pub struct Fat32<D: Disk> {
     disk: D,
+    info: FsInfo,
 }
 
 impl<D: Disk> Fat32<D> {
     pub fn mount(disk: D) -> Result<Self, Error> {
-        Ok(Fat32 { disk })
+	if disk.sector_count() == 0 {
+            return Err(Error::IoError);
+        }
+
+        let mut buffer = [0u8; SECTOR_SIZE];
+        disk.read_sector(0, &mut buffer)?;
+        
+        let boot_sector = unsafe { cast_slice_to_struct::<BootSector>(&buffer) };
+        
+        if boot_sector.boot_signature != 0xAA55 {
+            return Err(Error::InvalidFat32Structure);
+        }
+
+        let bpb = &boot_sector.bpb;
+        
+        let bytes_per_sector = bpb.bytes_per_sector as u32;
+        if bytes_per_sector != 512 {
+             return Err(Error::InvalidFat32Structure);
+        }
+
+        let reserved_sector_count = bpb.reserved_sector_count as u32;
+        let num_fats = bpb.num_fats as u32;
+        let fat_size = bpb.fat_size_32;
+        let root_cluster = bpb.root_cluster;
+
+        let first_fat_sector = reserved_sector_count;
+        let fat_sectors = num_fats * fat_size;
+        let first_data_sector = reserved_sector_count + fat_sectors;
+
+        let total_sectors = bpb.total_sectors_32;
+        let data_sectors = total_sectors - first_data_sector;
+        let cluster_count = data_sectors / (bpb.sectors_per_cluster as u32);
+
+
+        let fs_info = FsInfo {
+            bytes_per_sector,
+            sectors_per_cluster: bpb.sectors_per_cluster as u32,
+            reserved_sector_count,
+            num_fats,
+            fat_size,
+            root_cluster,
+            first_fat_sector,
+            first_data_sector,
+            cluster_count,
+        };
+
+
+        Ok(Fat32 { 
+	    disk,
+	    info: fs_info, 
+	})
     }
 }
 
