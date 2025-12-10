@@ -1,6 +1,7 @@
 use core::fmt;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::mem::size_of;
 
 pub const SECTOR_SIZE: usize = 512;
 
@@ -74,4 +75,26 @@ pub struct BootSector {
     pub bpb: BiosParameterBlock,    
     _padding: [u8; 420],            
     pub boot_signature: u16,        
+}
+
+
+pub struct FsInfo {
+    pub bytes_per_sector: u32,
+    pub sectors_per_cluster: u32,
+    pub reserved_sector_count: u32,
+    pub num_fats: u32,
+    pub fat_size: u32,
+    pub root_cluster: u32,
+    pub first_fat_sector: u32,
+    pub first_data_sector: u32,
+    pub cluster_count: u32,
+}
+
+/// # Safety
+/// Le slice d'entrée doit être suffisamment grand pour contenir la structure T (`slice.len() >= size_of::<T>()`)
+/// L'alignement de la structure T doit être valide dans le contexte `#[repr(packed)]` utilisé
+/// La séquence d'octets dans le slice doit représenter une valeur valide pour la structure T
+
+unsafe fn cast_slice_to_struct<T>(slice: &[u8]) -> &T {
+    &*(slice.as_ptr() as *const T)
 }
