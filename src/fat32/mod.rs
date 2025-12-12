@@ -30,6 +30,13 @@ pub struct Fat32<D: Disk> {
     info: FsInfo,
 }
 
+pub struct FileInfo {
+    pub name: String,
+    pub is_directory: bool,
+    pub size: u32,
+    pub start_cluster: u32,
+}
+
 impl<D: Disk> Fat32<D> {
     pub fn mount(disk: D) -> Result<Self, Error> {
 	if disk.sector_count() == 0 {
@@ -85,34 +92,82 @@ impl<D: Disk> Fat32<D> {
 	})
     }
 
-	fn cluster_to_lba(&self, cluster: u32) -> u32 {
+    fn cluster_to_lba(&self, cluster: u32) -> u32 {
             let cluster_offset = cluster - 2;
             self.info.first_data_sector + (cluster_offset * self.info.sectors_per_cluster)
-    	}	
+    }	
 
-    	fn get_fat_entry(&self, cluster: u32) -> Result<u32, Error> {
-            if cluster < 2 || cluster >= self.info.cluster_count + 2 {
+    fn get_fat_entry(&self, cluster: u32) -> Result<u32, Error> {
+        if cluster < 2 || cluster >= self.info.cluster_count + 2 {
                 return Err(Error::InvalidFat32Structure);
-        }
+    	}
         
-        let fat_entry_offset = cluster * 4; 
-        let fat_sector_num = self.info.first_fat_sector + (fat_entry_offset / self.info.bytes_per_sector);
-        let fat_entry_in_sector = fat_entry_offset % self.info.bytes_per_sector;
-        let mut buffer = [0u8; SECTOR_SIZE];
-        self.disk.read_sector(fat_sector_num, &mut buffer)?; 
+    	let fat_entry_offset = cluster * 4; 
+    	let fat_sector_num = self.info.first_fat_sector + (fat_entry_offset / self.info.bytes_per_sector);
+    	let fat_entry_in_sector = fat_entry_offset % self.info.bytes_per_sector;
+    	let mut buffer = [0u8; SECTOR_SIZE];
+    	self.disk.read_sector(fat_sector_num, &mut buffer)?; 
 
-        let entry_bytes: [u8; 4] = [
+    	let entry_bytes: [u8; 4] = [
             buffer[fat_entry_in_sector as usize],
             buffer[(fat_entry_in_sector + 1) as usize],
             buffer[(fat_entry_in_sector + 2) as usize],
             buffer[(fat_entry_in_sector + 3) as usize],
-        ];
+    	];
 
         let entry = u32::from_le_bytes(entry_bytes);
         
         Ok(entry & 0x0FFFFFFF)
     }
 
+    pub fn read_directory(&self, start_cluster: u32) -> Result<Vec<FileInfo>, Error> {
+        let mut current_cluster = start_cluster;
+        let mut entries = Vec::new();
+        let mut buffer = [0u8; SECTOR_SIZE];
+        
+        loop {
+            if current_cluster >= 0x0FFFFFF8 {
+                break;
+            }
+
+            let lba = self.cluster_to_lba(current_cluster);
+            let sectors_per_cluster = self.info.sectors_per_cluster;
+            let entries_per_sector = SECTOR_SIZE / size_of::<DirEntry>();
+            
+            for i in 0..sectors_per_cluster {
+                self.disk.read_sector(lba + i, &mut buffer)?;
+                
+                for j in 0..entries_per_sector {
+                    let offset = j * size_of::<DirEntry>();
+                    let entry = unsafe { cast_slice_to_struct::<DirEntry>(&buffer[offset..]) };
+
+                    if entry.name[0] == 0x00 { 
+                        return Ok(entries);
+                    }
+                    
+                    if entry.name[0] == 0xE5 {
+                        continue;
+                    }
+                    
+                    if entry.attributes == ATTR_LFN {
+                        continue;
+                    }
+                    
+                    let name = String::from_utf8_lossy(&entry.name).trim_end().to_string();
+                    let file_info = FileInfo {
+                        name,
+                        is_directory: (entry.attributes & ATTR_DIRECTORY) != 0,
+                        size: entry.file_size,
+                        start_cluster: (entry.first_cluster_high as u32) << 16 | (entry.first_cluster_low as u32),
+                    };
+                    entries.push(file_info);
+                }
+            }
+            current_cluster = self.get_fat_entry(current_cluster)?;
+        }
+
+        Ok(entries)
+    }
 
 }
 
@@ -179,3 +234,28 @@ pub struct FsInfo {
 unsafe fn cast_slice_to_struct<T>(slice: &[u8]) -> &T {
     &*(slice.as_ptr() as *const T)
 }
+
+
+#[repr(packed)]
+pub struct DirEntry {
+    pub name: [u8; 11],       
+    pub attributes: u8,         
+    pub nt_reserved: u8,        
+    pub create_time_tenth: u8,  
+    pub create_time: u16,      
+    pub create_date: u16,      
+    pub last_access_date: u16,  
+    pub first_cluster_high: u16,
+    pub write_time: u16,        
+    pub write_date: u16,      
+    pub first_cluster_low: u16, 
+    pub file_size: u32,      
+}
+
+pub const ATTR_READ_ONLY: u8 = 0x01;
+pub const ATTR_HIDDEN: u8    = 0x02;
+pub const ATTR_SYSTEM: u8    = 0x04;
+pub const ATTR_VOLUME_ID: u8 = 0x08;
+pub const ATTR_DIRECTORY: u8 = 0x10;
+pub const ATTR_ARCHIVE: u8   = 0x20;
+pub const ATTR_LFN: u8       = 0x0F;
