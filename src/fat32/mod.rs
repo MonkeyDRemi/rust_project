@@ -84,6 +84,36 @@ impl<D: Disk> Fat32<D> {
 	    info: fs_info, 
 	})
     }
+
+	fn cluster_to_lba(&self, cluster: u32) -> u32 {
+            let cluster_offset = cluster - 2;
+            self.info.first_data_sector + (cluster_offset * self.info.sectors_per_cluster)
+    	}	
+
+    	fn get_fat_entry(&self, cluster: u32) -> Result<u32, Error> {
+            if cluster < 2 || cluster >= self.info.cluster_count + 2 {
+                return Err(Error::InvalidFat32Structure);
+        }
+        
+        let fat_entry_offset = cluster * 4; 
+        let fat_sector_num = self.info.first_fat_sector + (fat_entry_offset / self.info.bytes_per_sector);
+        let fat_entry_in_sector = fat_entry_offset % self.info.bytes_per_sector;
+        let mut buffer = [0u8; SECTOR_SIZE];
+        self.disk.read_sector(fat_sector_num, &mut buffer)?; 
+
+        let entry_bytes: [u8; 4] = [
+            buffer[fat_entry_in_sector as usize],
+            buffer[(fat_entry_in_sector + 1) as usize],
+            buffer[(fat_entry_in_sector + 2) as usize],
+            buffer[(fat_entry_in_sector + 3) as usize],
+        ];
+
+        let entry = u32::from_le_bytes(entry_bytes);
+        
+        Ok(entry & 0x0FFFFFFF)
+    }
+
+
 }
 
 
