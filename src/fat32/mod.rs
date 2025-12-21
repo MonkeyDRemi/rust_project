@@ -169,6 +169,31 @@ impl<D: Disk> Fat32<D> {
         Ok(entries)
     }
 
+    pub fn find_entry(&self, path: &str, start_cluster: u32) -> Result<FileInfo, Error> {
+        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut current_cluster = start_cluster;
+        let mut last_info = None;
+
+        for (i, part) in parts.iter().enumerate() {
+            let entries = self.read_directory(current_cluster)?;
+            let found = entries.into_iter().find(|e| e.name.eq_ignore_ascii_case(part));
+
+            match found {
+                Some(info) => {
+                    if i == parts.len() - 1 {
+                        return Ok(info);
+                    }
+                    if !info.is_directory {
+                        return Err(Error::InvalidPath);
+                    }
+                    current_cluster = info.start_cluster;
+                    last_info = Some(info);
+                }
+                None => return Err(Error::FileNotFound),
+            }
+        }
+        last_info.ok_or(Error::InvalidPath)
+    }
 }
 
 
