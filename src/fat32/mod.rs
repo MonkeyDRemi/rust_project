@@ -194,6 +194,40 @@ impl<D: Disk> Fat32<D> {
         }
         last_info.ok_or(Error::InvalidPath)
     }
+
+
+    pub fn read_file(&self, file: &FileInfo) -> Result<Vec<u8>, Error> {
+        if file.is_directory {
+            return Err(Error::IoError);
+        }
+
+        let mut content = Vec::with_capacity(file.size as usize);
+        let mut current_cluster = file.start_cluster;
+        let mut bytes_remaining = file.size;
+        let mut buffer = [0u8; SECTOR_SIZE];
+
+        while bytes_remaining > 0 {
+            if current_cluster >= 0x0FFFFFF8 || current_cluster < 2 {
+                break;
+            }
+
+            let lba = self.cluster_to_lba(current_cluster);
+            
+            for i in 0..self.info.sectors_per_cluster {
+                if bytes_remaining == 0 { break; }
+                
+                self.disk.read_sector(lba + i, &mut buffer)?;
+                
+                let to_copy = core::cmp::min(bytes_remaining, SECTOR_SIZE as u32);
+                content.extend_from_slice(&buffer[..to_copy as usize]);
+                bytes_remaining -= to_copy;
+            }
+
+            current_cluster = self.get_fat_entry(current_cluster)?;
+        }
+
+        Ok(content)
+    }
 }
 
 
